@@ -1,0 +1,141 @@
+---
+title: "SteamSpy API Game Data Mining"
+author: "Jie Hu"
+date: "June 8, 2016"
+output: html_document
+---
+
+This is a program discover what kind of games on Steam will be likely to get higher score rank (Calculated by SteamSpy using players' reviews).
+
+### Step 1: Get the data
+#### Please refer to "steamSpy_tAPI.py" I get data from SteamSpy API using python.
+
+Data code:
+  * appid - Steam Application ID. If it's 999999, then data for this application is hidden on developer's request, sorry.
+  * name - the game's name
+  * developer - comma separated list of the developers of the game
+  * publisher - comma separated list of the publishers of the game
+  * score_rank - score rank of the game based on user reviews
+  * owners - owners of this application on Steam. **Beware of free weekends!**
+  * owners_variance - variance in owners. The real number of owners lies somewhere on owners +/- owners_variance range.   
+  * players_forever - people that have played this game since March 2009.
+  * players_forever_variance - variance for total players.
+  * players_2weeks - people that have played this game in the last 2 weeks.
+  * players_2weeks_variance - variance for the number of players in the last two weeks. 
+  * average_forever - average playtime since March 2009. In minutes.
+  * average_2weeks - average playtime in the last two weeks. In minutes.
+  * median_forever - median playtime since March 2009. In minutes.
+  * median_2weeks - median playtime in the last two weeks. In minutes.
+  * ccu - peak CCU yesterday.
+
+### Step 2: Pre-processing data
+
+```{r}
+steam.data <- read.csv("SteamSpy_tAPI.csv", sep=",")
+str(steam.data)
+
+# remove APP_ID
+steam.data <- steam.data[-1]
+summary(steam.data)
+
+# Because we only have 4 NAs in publisher column and 687 NA's in score_rank, which takes only tiny percentage of whole data, I will just remove these NA values. 
+steam.data <- na.omit(steam.data)
+str(steam.data)
+
+```
+
+We now have 8189 observations and 15 variables, including 3 categorical variables which have huge number of levels.
+
+```{r}
+names(steam.data)
+hist(steam.data$score_rank)
+# Like uniform distribution
+library(corrplot)
+# numeric data:
+steam_num <- steam.data[c(-4,-7,-14)]
+corrplot(cor(steam_num), method = "ellipse",order="hclust", insig = "pch", addrect=3)
+
+# Plot relationship in details
+library(psych)
+pairs.panels(steam_num)
+
+
+
+```
+
+#### Step 3 - Training model using regression tree
+
+Firstly I would try linear regression:
+
+```{r}
+# Because name, developer, publisher are factors gaming companies do not want to consider as factor, here I just remove them in full model:
+model_full <- lm(score_rank + 1 ~ average_2weeks + average_forever + ccu + median_2weeks + median_forever + owners + owners_variance + players_2weeks + players_2weeks_variance + players_forever + players_forever_variance, data = steam_num)
+
+summary(model_full)
+anova(model_full)
+
+# Check if normality, linearity and const variance are satisfied
+par(mfrow=c(2,2))
+plot(model_full)
+
+```
+
+It seems all of these factors are not well satisfied, therefore, I use regression tree to better fit the data:
+```{r}
+indx = sample(1:nrow(steam_num), as.integer(0.9*nrow(steam_num)))
+indx
+
+steam_train = steam_num[indx,]
+steam_test = steam_num[-indx,]
+
+library(rpart)
+library(rpart.plot)
+
+
+m.rpart <- rpart(score_rank ~ ., data = steam_train)
+
+# a basic decision tree diagram
+par(mfrow=c(1,1))
+rpart.plot(m.rpart, digits = 3)
+
+# a few adjustments to the diagram
+rpart.plot(m.rpart, digits = 4, fallen.leaves = TRUE, type = 3, extra = 101)
+
+
+```
+
+### Step 4: Evaluate model performance ----
+
+```{r}
+# generate predictions for the testing dataset
+p.rpart <- predict(m.rpart, steam_test)
+
+# compare the distribution of predicted values vs. actual values
+summary(p.rpart)
+summary(steam_test$score_rank)
+
+# compare the correlation
+cor(p.rpart, steam_test$score_rank)
+
+# function to calculate the mean absolute error
+MAE <- function(actual, predicted) {
+  mean(abs(actual - predicted))  
+}
+
+# mean absolute error between predicted and actual values
+MAE(p.rpart, steam_test$score_rank)
+
+# mean absolute error between actual values and mean value
+mean(steam_test$score_rank) 
+MAE(47.93773, steam_test$score_rank)
+
+```
+
+This error may due to:
+*Need more information like genre of games, time to be published, region and age of players etc.
+*score_rank was calculated in a non-official way by SteamSpy, so it's not a feasible score, it's better to use 5-star score structure
+
+
+
+
+
